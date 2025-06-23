@@ -10,6 +10,7 @@
  * @property {string} type - The type of the checkpoint.
  * @property {Uint8Array} checkpoint - The checkpoint data.
  * @property {Uint8Array} metadata - The metadata associated with the checkpoint.
+ * @property {number} [ttl] - The TTL timestamp for the item (Unix timestamp in seconds).
  */
 export interface CheckpointItem {
     thread_id: string;
@@ -19,6 +20,7 @@ export interface CheckpointItem {
     type: string;
     checkpoint: Uint8Array;
     metadata: Uint8Array;
+    ttl?: number;
 }
 
 /**

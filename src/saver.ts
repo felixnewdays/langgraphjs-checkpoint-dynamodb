@@ -29,11 +29,13 @@ import { DynamoDBWriteItem, Write } from './write';
  * @param {SerializerProtocol} [params.serde] - Optional serializer protocol for serializing and deserializing data.
  * @param {string} params.checkpointsTableName - The name of the DynamoDB table for storing checkpoints.
  * @param {string} params.writesTableName - The name of the DynamoDB table for storing writes.
+ * @param {number} [params.ttl] - Optional TTL duration in seconds for both tables.
  *
  * @property {DynamoDBClient} client - The DynamoDB client instance.
  * @property {DynamoDBDocument} docClient - The DynamoDB document client instance.
  * @property {string} checkpointsTableName - The name of the DynamoDB table for storing checkpoints.
  * @property {string} writesTableName - The name of the DynamoDB table for storing writes.
+ * @property {number | undefined} ttl - The TTL duration in seconds for both tables.
  *
  * @method getTuple - Retrieves a checkpoint tuple based on the provided configuration.
  * @param {RunnableConfig} config - The configuration for the runnable.
@@ -76,29 +78,37 @@ import { DynamoDBWriteItem, Write } from './write';
  * @param {Record<string, unknown> | undefined} configurable - The configurable object to validate.
  * @returns {ValidatedConfigurable} - The validated configurable object.
  * @throws {Error} - Throws an error if the configurable object is invalid.
+ *
+ * @private
+ * @method calculateTTL - Calculates the TTL timestamp if TTL is configured.
+ * @returns {number | undefined} - The TTL timestamp in seconds since Unix epoch, or undefined if TTL is not configured.
  */
 export class DynamoDBSaver extends BaseCheckpointSaver {
     private client: DynamoDBClient;
     private docClient: DynamoDBDocument;
     private checkpointsTableName: string;
     private writesTableName: string;
+    private ttl?: number;
 
     constructor({
         clientConfig,
         serde,
         checkpointsTableName,
         writesTableName,
+        ttl,
     }: {
         clientConfig?: DynamoDBClientConfig;
         serde?: SerializerProtocol;
         checkpointsTableName: string;
         writesTableName: string;
+        ttl?: number;
     }) {
         super(serde);
         this.client = new DynamoDBClient(clientConfig || {});
         this.docClient = DynamoDBDocument.from(this.client);
         this.checkpointsTableName = checkpointsTableName;
         this.writesTableName = writesTableName;
+        this.ttl = ttl;
     }
 
     async getTuple(
@@ -190,12 +200,12 @@ export class DynamoDBSaver extends BaseCheckpointSaver {
             metadata,
             parentConfig: item.parent_checkpoint_id
                 ? {
-                      configurable: {
-                          thread_id: item.thread_id,
-                          checkpoint_ns: item.checkpoint_ns,
-                          checkpoint_id: item.parent_checkpoint_id,
-                      },
-                  }
+                    configurable: {
+                        thread_id: item.thread_id,
+                        checkpoint_ns: item.checkpoint_ns,
+                        checkpoint_id: item.parent_checkpoint_id,
+                    },
+                }
                 : undefined,
             pendingWrites,
         };
@@ -251,12 +261,12 @@ export class DynamoDBSaver extends BaseCheckpointSaver {
                     metadata,
                     parentConfig: item.parent_checkpoint_id
                         ? {
-                              configurable: {
-                                  thread_id: item.thread_id,
-                                  checkpoint_ns: item.checkpoint_ns,
-                                  checkpoint_id: item.parent_checkpoint_id,
-                              },
-                          }
+                            configurable: {
+                                thread_id: item.thread_id,
+                                checkpoint_ns: item.checkpoint_ns,
+                                checkpoint_id: item.parent_checkpoint_id,
+                            },
+                        }
                         : undefined,
                 };
             }
@@ -288,6 +298,12 @@ export class DynamoDBSaver extends BaseCheckpointSaver {
             checkpoint: serializedCheckpoint,
             metadata: serializedMetadata,
         };
+
+        // Add TTL if configured
+        const ttl = this.calculateTTL();
+        if (ttl !== undefined) {
+            item.ttl = ttl;
+        }
 
         await this.docClient.put({
             TableName: this.checkpointsTableName,
@@ -326,6 +342,7 @@ export class DynamoDBSaver extends BaseCheckpointSaver {
                 channel: write[0],
                 type,
                 value: serializedValue,
+                ttl: this.calculateTTL(),
             });
 
             return {
@@ -388,5 +405,13 @@ export class DynamoDBSaver extends BaseCheckpointSaver {
             checkpoint_ns: checkpoint_ns ?? '',
             checkpoint_id: checkpoint_id,
         };
+    }
+
+    private calculateTTL(): number | undefined {
+        if (this.ttl) {
+            const now = Math.floor(Date.now() / 1000); // Current time in seconds
+            return now + this.ttl;
+        }
+        return undefined;
     }
 }

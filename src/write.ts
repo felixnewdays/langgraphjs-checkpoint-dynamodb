@@ -15,6 +15,7 @@ export interface DynamoDBWriteItem {
     channel: string;
     type: string;
     value: Uint8Array;
+    ttl?: number;
 }
 
 /**
@@ -31,6 +32,7 @@ export interface DynamoDBWriteItem {
  * @property {string} channel - The channel of the write operation.
  * @property {string} type - The type of the write operation.
  * @property {Uint8Array} value - The value of the write operation.
+ * @property {number} [ttl] - The TTL timestamp for the item (Unix timestamp in seconds).
  *
  * @constructor
  * @param {Object} WriteProperties - The properties to initialize the `Write` instance.
@@ -42,6 +44,7 @@ export interface DynamoDBWriteItem {
  * @param {string} WriteProperties.channel - The channel of the write operation.
  * @param {string} WriteProperties.type - The type of the write operation.
  * @param {Uint8Array} WriteProperties.value - The value of the write operation.
+ * @param {number} [WriteProperties.ttl] - The TTL timestamp for the item.
  *
  * @method toDynamoDBItem
  * @returns {DynamoDBWriteItem} The DynamoDB item representation of the write operation.
@@ -69,6 +72,7 @@ export class Write {
     readonly channel: string;
     readonly type: string;
     readonly value: Uint8Array;
+    readonly ttl?: number;
 
     constructor({
         thread_id,
@@ -79,7 +83,8 @@ export class Write {
         channel,
         type,
         value,
-    }: WriteProperties) {
+        ttl,
+    }: WriteProperties & { ttl?: number }) {
         this.thread_id = thread_id;
         this.checkpoint_ns = checkpoint_ns;
         this.checkpoint_id = checkpoint_id;
@@ -88,10 +93,11 @@ export class Write {
         this.channel = channel;
         this.type = type;
         this.value = value;
+        this.ttl = ttl;
     }
 
     toDynamoDBItem(): DynamoDBWriteItem {
-        return {
+        const item: DynamoDBWriteItem = {
             thread_id_checkpoint_id_checkpoint_ns: Write.getPartitionKey({
                 thread_id: this.thread_id,
                 checkpoint_id: this.checkpoint_id,
@@ -102,6 +108,12 @@ export class Write {
             type: this.type,
             value: this.value,
         };
+
+        if (this.ttl !== undefined) {
+            item.ttl = this.ttl;
+        }
+
+        return item;
     }
 
     static fromDynamoDBItem({
@@ -110,6 +122,7 @@ export class Write {
         channel,
         type,
         value,
+        ttl,
     }: DynamoDBWriteItem): Write {
         const [thread_id, checkpoint_id, checkpoint_ns] =
             thread_id_checkpoint_id_checkpoint_ns.split(this.separator());
@@ -123,6 +136,7 @@ export class Write {
             channel,
             type,
             value,
+            ttl,
         });
     }
 
