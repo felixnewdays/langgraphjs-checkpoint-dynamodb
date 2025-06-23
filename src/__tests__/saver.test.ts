@@ -198,9 +198,15 @@ describe('DynamoDBSaver', () => {
             //     thread_id: '1',
             //   },
             // };
-            // const checkpoint = { id: 'checkpoint1', data: 'some data' };
-            // const metadata = { source: 'update', step: -1, writes: null } as CheckpointMetadata;
-            // await expect(saver.put(config, checkpoint, metadata)).rejects.toThrow('Unsupported type: unsupported');
+
+            // await expectErrorMessageToBeThrown(
+            //   () => saver.put(config, checkpoint1, {
+            //     source: 'update',
+            //     step: -1,
+            //     writes: null,
+            //   } as CheckpointMetadata),
+            //   'Unsupported type'
+            // );
         });
 
         it.skip('should handle deserialization errors gracefully in getTuple', async () => {
@@ -304,6 +310,93 @@ describe('DynamoDBSaver', () => {
             const retrieved = await saver.getTuple(config);
             expect(retrieved?.checkpoint).toEqual(checkpoint);
             expect(retrieved?.metadata).toEqual(metadata);
+        });
+
+        it('should set TTL when configured', async () => {
+            const ttlSaver = new DynamoDBSaver({
+                clientConfig: {},
+                serde: serializer,
+                checkpointsTableName: 'Checkpoints',
+                writesTableName: 'Writes',
+                ttl: 3600, // 1 hour TTL
+            });
+
+            // Replace the real docClient with the mock
+            (ttlSaver as any).docClient = mockDocClient;
+
+            // Save checkpoint with TTL
+            await ttlSaver.put(config1, checkpoint1, {
+                source: 'update',
+                step: -1,
+                writes: null,
+            } as CheckpointMetadata);
+
+            // Retrieve the saved item to verify TTL was set
+            const savedItem = await mockDocClient.get({
+                TableName: 'Checkpoints',
+                Key: {
+                    thread_id: '1',
+                    checkpoint_id: checkpoint1.id,
+                },
+            });
+
+            expect(savedItem.Item).toBeDefined();
+            expect(savedItem.Item.ttl).toBeDefined();
+            expect(typeof savedItem.Item.ttl).toBe('number');
+
+            // Verify TTL is a reasonable future timestamp (within 1 hour + 5 seconds)
+            const ttlValue = savedItem.Item.ttl;
+            const now = Math.floor(Date.now() / 1000);
+            expect(ttlValue).toBeGreaterThan(now);
+            expect(ttlValue).toBeLessThanOrEqual(now + 3605); // 1 hour + 5 seconds buffer
+        });
+
+        it('should set TTL for writes when configured', async () => {
+            const ttlSaver = new DynamoDBSaver({
+                clientConfig: {},
+                serde: serializer,
+                checkpointsTableName: 'Checkpoints',
+                writesTableName: 'Writes',
+                ttl: 1800, // 30 minutes TTL
+            });
+
+            // Replace the real docClient with the mock
+            (ttlSaver as any).docClient = mockDocClient;
+
+            // Save writes with TTL
+            await ttlSaver.putWrites(
+                {
+                    configurable: {
+                        thread_id: '1',
+                        checkpoint_ns: '',
+                        checkpoint_id: 'test-checkpoint',
+                    },
+                },
+                [['bar', 'baz']] as PendingWrite[],
+                'foo'
+            );
+
+            // Query the writes table to verify TTL was set
+            const writesResult = await mockDocClient.query({
+                TableName: 'Writes',
+                KeyConditionExpression: 'thread_id_checkpoint_id_checkpoint_ns = :thread_id_checkpoint_id_checkpoint_ns',
+                ExpressionAttributeValues: {
+                    ':thread_id_checkpoint_id_checkpoint_ns': '1:::test-checkpoint:::',
+                },
+            });
+
+            expect(writesResult.Items).toBeDefined();
+            expect(writesResult.Items!.length).toBeGreaterThan(0);
+
+            const writeItem = writesResult.Items![0];
+            expect(writeItem.ttl).toBeDefined();
+            expect(typeof writeItem.ttl).toBe('number');
+
+            // Verify TTL is a reasonable future timestamp (within 30 minutes + 5 seconds)
+            const ttlValue = writeItem.ttl;
+            const now = Math.floor(Date.now() / 1000);
+            expect(ttlValue).toBeGreaterThan(now);
+            expect(ttlValue).toBeLessThanOrEqual(now + 1805); // 30 minutes + 5 seconds buffer
         });
     });
 });

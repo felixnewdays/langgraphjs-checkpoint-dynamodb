@@ -1,186 +1,176 @@
-# langgraphjs-checkpoint-dynamodb
+# LangGraph.js DynamoDB Checkpoint Saver
 
-Implementation of a LangGraph.js CheckpointSaver that uses a AWS's DynamoDB
+A DynamoDB-based checkpoint saver for LangGraph.js applications.
 
-## Package name
+## Features
+
+- **DynamoDB Integration**: Store checkpoints and writes in AWS DynamoDB
+- **TTL Support**: Optional Time-To-Live (TTL) for automatic data expiration
+- **Batch Operations**: Efficient batch writing for multiple operations
+- **TypeScript Support**: Full TypeScript support with type definitions
+
+## Installation
 
 ```bash
-@rwai/langgraphjs-checkpoint-dynamodb
+npm install langgraphjs-checkpoint-dynamodb
 ```
 
-## Inspiration
+## Usage
 
-Guidance and inspiration has been taken from the existing checkpoint savers
-(Sqlite and MongoDB) written by the Langgraph JS team.
-
--   [Sqlite](https://github.com/langchain-ai/langgraphjs/tree/main/libs/checkpoint-sqlite)
--   [MongoDB](https://github.com/langchain-ai/langgraphjs/tree/main/libs/checkpoint-mongodb)
-
-## Required DynamoDB Tables
-
-To be able to use this checkpointer, two DynamoDB table's are needed, one to store
-checkpoints and the other to store writes. Below are some examples of how you
-can create the required tables.
-
-### Terraform
-
-```hcl
-# Variables for table names
-variable "checkpoints_table_name" {
-  type = string
-}
-
-variable "writes_table_name" {
-  type = string
-}
-
-# Checkpoints Table
-resource "aws_dynamodb_table" "checkpoints_table" {
-  name         = var.checkpoints_table_name
-  billing_mode = "PAY_PER_REQUEST"
-
-  hash_key  = "thread_id"
-  range_key = "checkpoint_id"
-
-  attribute {
-    name = "thread_id"
-    type = "S"
-  }
-
-  attribute {
-    name = "checkpoint_id"
-    type = "S"
-  }
-}
-
-# Writes Table
-resource "aws_dynamodb_table" "writes_table" {
-  name         = var.writes_table_name
-  billing_mode = "PAY_PER_REQUEST"
-
-  hash_key  = "thread_id_checkpoint_id_checkpoint_ns"
-  range_key = "task_id_idx"
-
-  attribute {
-    name = "thread_id_checkpoint_id_checkpoint_ns"
-    type = "S"
-  }
-
-  attribute {
-    name = "task_id_idx"
-    type = "S"
-  }
-}
-```
-
-### AWS CDK
+### Basic Usage
 
 ```typescript
-import * as cdk from '@aws-cdk/core';
-import * as dynamodb from '@aws-cdk/aws-dynamodb';
+import { DynamoDBSaver } from 'langgraphjs-checkpoint-dynamodb';
 
-export class DynamoDbStack extends cdk.Stack {
-    constructor(scope: cdk.Construct, id: string, props?: cdk.StackProps) {
-        super(scope, id, props);
-
-        const checkpointsTableName = 'YourCheckpointsTableName';
-        const writesTableName = 'YourWritesTableName';
-
-        // Checkpoints Table
-        new dynamodb.Table(this, 'CheckpointsTable', {
-            tableName: checkpointsTableName,
-            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-            partitionKey: { name: 'thread_id', type: dynamodb.AttributeType.STRING },
-            sortKey: { name: 'checkpoint_id', type: dynamodb.AttributeType.STRING },
-        });
-
-        // Writes Table
-        new dynamodb.Table(this, 'WritesTable', {
-            tableName: writesTableName,
-            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-            partitionKey: {
-                name: 'thread_id_checkpoint_id_checkpoint_ns',
-                type: dynamodb.AttributeType.STRING,
-            },
-            sortKey: { name: 'task_id_idx', type: dynamodb.AttributeType.STRING },
-        });
-    }
-}
-```
-
-## Using the Checkpoint Saver
-
-### Default
-
-To use the DynamoDB checkpoint saver, you only need to specify the names of
-the checkpoints and writes tables. In this scenario the DynamoDB client will
-be instantiated with the default configuration, great for running on AWS Lambda.
-
-```typescript
-import { DynamoDBSaver } from '@rwai/langgraphjs-checkpoint-dynamodb';
-...
-const checkpointsTableName = 'YourCheckpointsTableName';
-const writesTableName = 'YourWritesTableName';
-
-const memory = new DynamoDBSaver({
-    checkpointsTableName,
-    writesTableName,
-});
-
-const graph = workflow.compile({ checkpointer: memory });
-```
-
-### Providing Client Configuration
-
-If you need to provide custom configuration to the DynamoDB client, you can
-pass in an object with the configuration options. Below is an example of how
-you can provide custom configuration.
-
-```typescript
-const memory = new DynamoDBSaver({
-    checkpointsTableName,
-    writesTableName,
+const saver = new DynamoDBSaver({
+    checkpointsTableName: 'my-checkpoints-table',
+    writesTableName: 'my-writes-table',
+    // Optional: AWS client configuration
     clientConfig: {
-        region: 'us-west-2',
-        accessKeyId: 'your-access-key-id',
-        secretAccessKey: 'your-secret-access-key',
-    },
+        region: 'us-east-1',
+        // ... other AWS SDK options
+    }
 });
 ```
 
-### Custom Serde (Serialization/Deserialization)
+### With TTL (Time-To-Live)
 
-Just as with the Sqlite and MongoDB checkpoint savers, you can provide custom
-serialization and deserialization functions. Below is an example of how you can
-provide custom serialization and deserialization functions.
+You can configure TTL to automatically expire data after a specified duration:
 
 ```typescript
-import { serialize, deserialize } from '@ungap/structured-clone';
-const serde = {
-    dumpsTyped: async function (obj: unknown): [string, Uint8Array] {
-        if (obj instanceof Uint8Array) {
-            return ['bytes', obj];
-        } else {
-            return ['json', new TextEncoder().encode(serialize(obj))];
-        }
-    },
-    loadsTyped: async function (type: string, data: Uint8Array | string): unknown {
-        switch (type) {
-            case 'json':
-                return deserialize(
-                    typeof data === 'string' ? data : new TextDecoder().decode(data)
-                );
-            case 'bytes':
-                return typeof data === 'string' ? new TextEncoder().encode(data) : data;
-            default:
-                throw new Error(`Unknown serialization type: ${type}`);
-        }
-    },
-};
+import { DynamoDBSaver } from 'langgraphjs-checkpoint-dynamodb';
 
-const memory = new DynamoDBSaver({
-    checkpointsTableName,
-    writesTableName,
-    serde,
+const saver = new DynamoDBSaver({
+    checkpointsTableName: 'my-checkpoints-table',
+    writesTableName: 'my-writes-table',
+    // TTL configuration - data will expire after 24 hours
+    ttl: 24 * 60 * 60 // 24 hours in seconds
 });
 ```
+
+### TTL Examples
+
+```typescript
+// 1 hour TTL
+const saver1 = new DynamoDBSaver({
+    checkpointsTableName: 'checkpoints',
+    writesTableName: 'writes',
+    ttl: 3600
+});
+
+// 7 days TTL
+const saver2 = new DynamoDBSaver({
+    checkpointsTableName: 'checkpoints',
+    writesTableName: 'writes',
+    ttl: 7 * 24 * 60 * 60
+});
+
+// 30 minutes TTL
+const saver3 = new DynamoDBSaver({
+    checkpointsTableName: 'checkpoints',
+    writesTableName: 'writes',
+    ttl: 30 * 60
+});
+```
+
+## DynamoDB Table Setup
+
+### Checkpoints Table
+
+```json
+{
+    "TableName": "checkpoints",
+    "KeySchema": [
+        {
+            "AttributeName": "thread_id",
+            "KeyType": "HASH"
+        },
+        {
+            "AttributeName": "checkpoint_id",
+            "KeyType": "RANGE"
+        }
+    ],
+    "AttributeDefinitions": [
+        {
+            "AttributeName": "thread_id",
+            "AttributeType": "S"
+        },
+        {
+            "AttributeName": "checkpoint_id",
+            "AttributeType": "S"
+        }
+    ],
+    "BillingMode": "PAY_PER_REQUEST"
+}
+```
+
+### Writes Table
+
+```json
+{
+    "TableName": "writes",
+    "KeySchema": [
+        {
+            "AttributeName": "thread_id_checkpoint_id_checkpoint_ns",
+            "KeyType": "HASH"
+        },
+        {
+            "AttributeName": "task_id_idx",
+            "KeyType": "RANGE"
+        }
+    ],
+    "AttributeDefinitions": [
+        {
+            "AttributeName": "thread_id_checkpoint_id_checkpoint_ns",
+            "AttributeType": "S"
+        },
+        {
+            "AttributeName": "task_id_idx",
+            "AttributeType": "S"
+        }
+    ],
+    "BillingMode": "PAY_PER_REQUEST"
+}
+```
+
+### TTL Configuration
+
+If you're using TTL, you'll need to enable TTL on your DynamoDB tables:
+
+```bash
+# For checkpoints table
+aws dynamodb update-time-to-live \
+    --table-name checkpoints \
+    --time-to-live-specification "Enabled=true, AttributeName=ttl"
+
+# For writes table
+aws dynamodb update-time-to-live \
+    --table-name writes \
+    --time-to-live-specification "Enabled=true, AttributeName=ttl"
+```
+
+## API Reference
+
+### DynamoDBSaver Constructor
+
+```typescript
+new DynamoDBSaver({
+    clientConfig?: DynamoDBClientConfig;
+    serde?: SerializerProtocol;
+    checkpointsTableName: string;
+    writesTableName: string;
+    ttl?: number;
+})
+```
+
+#### Parameters
+
+- `clientConfig` (optional): AWS DynamoDB client configuration
+- `serde` (optional): Serializer protocol for data serialization
+- `checkpointsTableName` (required): Name of the DynamoDB table for checkpoints
+- `writesTableName` (required): Name of the DynamoDB table for writes
+- `ttl` (optional): TTL duration in seconds for automatic data expiration
+
+## License
+
+MIT
